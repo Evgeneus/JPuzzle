@@ -5,6 +5,7 @@ from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from pl_bolts.optimizers.lars_scheduling import LARSWrapper
 
 from models.nets import Encoder
+from models.transformer import Transformer
 
 
 class JPNet(pl.LightningModule):
@@ -29,6 +30,13 @@ class JPNet(pl.LightningModule):
             self.num_tokens = self.num_pos**2
         else:
             raise NotImplementedError
+
+        # define transformer
+        depth, heads = 1, 1
+        mlp_hidden_dim = 128
+        self.transformer = Transformer(self.num_tokens, self.feat_dim, mlp_hidden_dim, depth, heads)
+
+        # define coordinate predictor
         self.predictor_x = torch.nn.Linear(self.feat_dim, self.num_pos)
         self.predictor_y = torch.nn.Linear(self.feat_dim, self.num_pos)
 
@@ -115,6 +123,9 @@ class JPNet(pl.LightningModule):
         # permute tokens and create labels for for jigsaw puzzle, i e x, y coordinates
         tokens_perm, labels_x, labels_y = self.permute_tokens(tokens.clone())
 
+        # transformer forward pass
+        tokens_perm = self.transformer(tokens_perm)
+
         # predict x,y coordinates for each token
         pred_x = self.predictor_x(tokens_perm).view(-1, self.num_pos)
         pred_y = self.predictor_y(tokens_perm).view(-1, self.num_pos)
@@ -143,18 +154,18 @@ class JPNet(pl.LightningModule):
     def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx):
         pass
 
-    def validation_step(self, batch, batch_idx):
-        images, labels = batch
-
-        # predict using online encoder
-        preds = self(images)
-
-        # calculate accuracy @k
-        acc1, acc5 = self.accuracy(preds, labels)
-
-        # gather results and log
-        logs = {'val/acc@1': acc1, 'val/acc@5': acc5}
-        self.log_dict(logs, on_step=False, on_epoch=True, sync_dist=True)
+    # def validation_step(self, batch, batch_idx):
+    #     images, labels = batch
+    #
+    #     # predict using online encoder
+    #     preds = self(images)
+    #
+    #     # calculate accuracy @k
+    #     acc1, acc5 = self.accuracy(preds, labels)
+    #
+    #     # gather results and log
+    #     logs = {'val/acc@1': acc1, 'val/acc@5': acc5}
+    #     self.log_dict(logs, on_step=False, on_epoch=True, sync_dist=True)
 
     @torch.no_grad()
     def accuracy(self, preds, targets, k=(1,5)):

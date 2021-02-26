@@ -6,10 +6,10 @@ from PIL import Image, ImageOps
 import numpy as np
 
 
-class BYOLDataTransform():
+class JPDataTransform():
 
     def __init__(self, crop_size, mean, std, blur_prob=(1.0, 0.1), solarize_prob=(0.0, 0.2)):
-        assert len(blur_prob) == 2 and len(solarize_prob) == 2, 'atm only 2 views are supported'
+        assert len(blur_prob) == 1 and len(solarize_prob) == 1, 'atm only 1 views are supported'
         self.crop_size = crop_size
         self.normalize = transform_lib.Normalize(mean=mean, std=std)
         self.color_jitter = transform_lib.ColorJitter(0.4, 0.4, 0.2, 0.1)

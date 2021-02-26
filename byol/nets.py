@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import models
+from collections import OrderedDict
 
 
 class MLP(nn.Module):
@@ -22,13 +22,22 @@ class MLP(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, arch, hidden_dim, proj_dim, low_res):
+    """
+    computes output after 4th layer of Resnet
+    """
+    def __init__(self, arch, low_res):
         super().__init__()
 
         # backbone
-        self.encoder = models.__dict__[arch]()
-        self.feat_dim = self.encoder.fc.weight.shape[1]
-        self.encoder.fc = nn.Identity()
+        resnet_arch = models.__dict__[arch]()
+        self.encoder = []
+        for name, module in resnet_arch.named_children():
+            if name == 'avgpool':
+                continue
+            if name == 'fc':
+                continue
+            self.encoder.append((name, module))
+        self.encoder = nn.Sequential(OrderedDict(self.encoder))
 
         # modify the encoder for lower resolution
         if low_res:
@@ -36,9 +45,6 @@ class Encoder(nn.Module):
                 3, 64, kernel_size=3, stride=1, padding=1, bias=False)
             self.encoder.maxpool = nn.Identity()
             self._reinit_all_layers()
-
-        # build heads
-        self.projection = MLP(self.feat_dim, hidden_dim, proj_dim)
 
     @torch.no_grad()
     def _reinit_all_layers(self):
@@ -52,5 +58,4 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         feats = self.encoder(x)
-        z = self.projection(feats)
-        return z, feats
+        return feats

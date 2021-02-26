@@ -3,7 +3,7 @@ from torchvision import datasets
 from torchvision import transforms as transform_lib
 from pytorch_lightning import LightningDataModule
 
-from data_utils.transforms import BYOLDataTransform
+from data_utils.transforms import JPDataTransform
 
 import os
 
@@ -105,12 +105,12 @@ class CIFARDataModule(LightningDataModule):
 
     def setup(self, stage=None): # called on every GPU
         # build tranforms
-        train_transform = BYOLDataTransform(
+        train_transform = JPDataTransform(
             crop_size=32,
             mean=self.mean,
             std=self.std,
-            blur_prob=[.0, .0],
-            solarize_prob=[.0, .2])
+            blur_prob=[.0],
+            solarize_prob=[.2])
         val_transform = self.default_transform()
         
         # build datasets

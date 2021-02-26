@@ -1,8 +1,7 @@
-import torch
 import pytorch_lightning as pl
 
 
-from byol.model import BYOL
+from byol.model import JPNet
 import data_utils.modules as data_modules
 
 from argparse import ArgumentParser
@@ -37,14 +36,14 @@ def main(args):
     dm_class = getattr(data_modules, args.dataset + 'DataModule')
     dm = dm_class(**args.__dict__)
 
-    run_name = '-'.join(['byol', args.arch, args.dataset, args.comment])
+    run_name = '-'.join(['JPNet', args.arch, args.dataset, args.comment])
     wandb_logger = pl.loggers.wandb.WandbLogger(
         name=run_name,
         project=args.project,
         entity=args.entity,
         offline=args.offline)
 
-    model = BYOL(**args.__dict__, num_classes=dm.num_classes)
+    model = JPNet(**args.__dict__, num_classes=dm.num_classes)
 
     trainer = pl.Trainer.from_argparse_args(args, 
         logger=wandb_logger)

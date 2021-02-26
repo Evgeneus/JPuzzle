@@ -4,12 +4,12 @@ import pytorch_lightning as pl
 from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from pl_bolts.optimizers.lars_scheduling import LARSWrapper
 
-from byol.nets import Encoder, MLP
+from byol.nets import Encoder
 
 import math
 
 
-class BYOL(pl.LightningModule):
+class JPNet(pl.LightningModule):
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -19,35 +19,27 @@ class BYOL(pl.LightningModule):
         # online encoder
         self.online_encoder = Encoder(
             arch=self.hparams.arch,
-            hidden_dim=self.hparams.hidden_dim,
-            proj_dim=self.hparams.proj_dim,
             low_res='CIFAR' in self.hparams.dataset)
 
-        # momentum encoder
-        self.momentum_encoder = Encoder(
-            arch=self.hparams.arch,
-            hidden_dim=self.hparams.hidden_dim,
-            proj_dim=self.hparams.proj_dim,
-            low_res='CIFAR' in self.hparams.dataset)
-        self.initialize_momentum_encoder()
-
-        # predictor
-        self.predictor = MLP(
-            input_dim=self.hparams.proj_dim,
-            hidden_dim=self.hparams.hidden_dim,
-            output_dim=self.hparams.proj_dim)
+        # regressor to predict correct position of a token
+        self.feat_dim = self.online_encoder.encoder.layer4[-1].bn2.weight.shape[0]
+        if 'CIFAR' in self.hparams.dataset:
+            # number of classes (positions) for x, y coordinate in image grid
+            # equal to square root of num_elements in the last cnn channel of encoder
+            # depends on image resolution
+            self.num_pos = 4
+            self.num_tokens = self.num_pos**2
+        else:
+            raise NotImplementedError
+        self.predictor_x = torch.nn.Linear(self.feat_dim, self.num_pos)
+        self.predictor_y = torch.nn.Linear(self.feat_dim, self.num_pos)
 
         # linear layer for eval
-        self.linear = torch.nn.Linear(
-            self.online_encoder.feat_dim, self.hparams.num_classes)
-
-    @torch.no_grad()
-    def initialize_momentum_encoder(self):
-        params_online = self.online_encoder.parameters()
-        params_momentum = self.momentum_encoder.parameters()
-        for po, pm in zip(params_online, params_momentum):
-            pm.data.copy_(po.data)
-            pm.requires_grad = False
+        self.linear = torch.nn.Sequential(
+            torch.nn.AdaptiveAvgPool2d((1, 1)),
+            torch.nn.Flatten(),
+            torch.nn.Linear(self.feat_dim, self.hparams.num_classes)
+        )
 
     def collect_params(self, models, exclude_bias_and_bn=True):
         param_list = []
@@ -69,7 +61,7 @@ class BYOL(pl.LightningModule):
 
     def configure_optimizers(self):
         params = self.collect_params([
-            self.online_encoder, self.predictor, self.linear])
+            self.online_encoder, self.linear])
         optimizer = LARSWrapper(torch.optim.SGD(
             params,
             lr=self.hparams.base_lr,
@@ -86,56 +78,72 @@ class BYOL(pl.LightningModule):
     def forward(self, x):
         return self.linear(self.online_encoder.encoder(x))
 
-    def cosine_similarity_loss(self, preds, targets):
-        preds = F.normalize(preds, dim=-1, p=2)
-        targets = F.normalize(targets, dim=-1, p=2)
-        return 2 - 2 * (preds * targets).sum(dim=-1).mean()
+    def permute_tokens(self, tokens):
+        # create labels for  for jigsaw puzzle, i e x, y coordinates
+        labels_x = torch.tensor([list(range(self.num_pos)) * self.num_pos] * self.hparams.batch_size, dtype=torch.long)
+        labels_x = labels_x.to(self.device)
+        labels_y = []
+        for i in range(self.num_pos):
+            labels_y += [i] * self.num_pos
+        labels_y = torch.tensor([labels_y] * self.hparams.batch_size, dtype=torch.long).to(self.device)
+
+        # feature permutation for jigsaw puzzle
+        # divide minibatch into buckets and do permutation of tokens in each bucket
+        rand_idx = torch.randperm(self.num_tokens)
+        labels_x = labels_x[:, rand_idx]
+        labels_y = labels_y[:, rand_idx]
+        tokens = tokens[:, rand_idx, :]
+        # bucket_size = 5
+        # for i in range(0, self.hparams.batch_size, bucket_size):
+        #     rand_idx = torch.randperm(self.num_tokens)
+        #     labels_x[i: i + bucket_size] = labels_x[i: i + bucket_size, rand_idx]
+        #     labels_y[i: i + bucket_size] = labels_y[i: i + bucket_size, rand_idx]
+        #     tokens[i: i + bucket_size, :] = tokens[i: i + bucket_size, rand_idx, :]
+        labels_x = labels_x.view(-1)
+        labels_y = labels_y.view(-1)
+
+        return tokens, labels_x, labels_y
 
     def training_step(self, batch, batch_idx):
         views, labels = batch
 
         # forward online encoder
         input_online = torch.cat(views, dim=0)
-        z, feats = self.online_encoder(input_online)
-        preds = self.predictor(z)
+        # reshape cnn features for representing tokens
+        features = self.online_encoder(input_online)
+        tokens = features.view(self.hparams.batch_size, self.feat_dim, self.num_tokens)
+        # each element in the feature grid is a token
+        tokens = tokens.permute(0, 2, 1)
+        # permute tokens and create labels for for jigsaw puzzle, i e x, y coordinates
+        tokens_perm, labels_x, labels_y = self.permute_tokens(tokens.clone())
 
-        # forward momentum encoder
-        with torch.no_grad():
-            input_momentum = torch.cat(views[::-1], dim=0)
-            targets, _ = self.momentum_encoder(input_momentum)
-        
-        # compute BYOL loss
-        loss = self.cosine_similarity_loss(preds, targets)
+        # predict x,y coordinates for each token
+        pred_x = self.predictor_x(tokens_perm).view(-1, self.num_pos)
+        pred_y = self.predictor_y(tokens_perm).view(-1, self.num_pos)
+        loss = F.cross_entropy(pred_x, labels_x) + F.cross_entropy(pred_y, labels_y)
+
+        # compute accuracy for coordinate predictions
+        _, pred_x_class = torch.max(pred_x.data, 1)
+        jx_acc = (pred_x_class == labels_x).sum().item() / len(labels_x)
+        _, pred_y_class = torch.max(pred_y.data, 1)
+        jy_acc = (pred_y_class == labels_y).sum().item() / len(labels_y)
 
         # train linear layer
-        preds_linear = self.linear(feats.detach())
-        loss_linear = F.cross_entropy(preds_linear, labels.repeat(2))
+        preds_linear = self.linear(features.detach())
+        loss_linear = F.cross_entropy(preds_linear, labels)
 
         # gather results and log stats
         logs = {
             'loss': loss,
             'loss_linear': loss_linear,
-            'lr': self.trainer.optimizers[0].param_groups[0]['lr'],
-            'momentum': self.current_momentum}
+            'jx_acc': jx_acc,
+            'jy_acc': jy_acc,
+            'lr': self.trainer.optimizers[0].param_groups[0]['lr']}
         self.log_dict(logs, on_step=False, on_epoch=True, sync_dist=True)
         return loss + loss_linear * self.hparams.linear_loss_weight
 
     def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx):
-        # update momentum encoder
-        self.momentum_update(
-            self.online_encoder, self.momentum_encoder, self.current_momentum)
-        # update momentum value
-        max_steps = len(self.trainer.train_dataloader) * self.trainer.max_epochs
-        self.current_momentum = self.hparams.final_momentum - \
-            (self.hparams.final_momentum - self.hparams.base_momentum) * \
-            (math.cos(math.pi * self.trainer.global_step / max_steps) + 1) / 2
-
-    @torch.no_grad()
-    def momentum_update(self, online_encoder, momentum_encoder, m):
-        online_params = online_encoder.parameters()
-        momentum_params = momentum_encoder.parameters()
-        for po, pm in zip(online_params, momentum_params):
-            pm.data.mul_(m).add_(po.data, alpha=1. - m)
+        pass
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch

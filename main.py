@@ -1,7 +1,6 @@
 import pytorch_lightning as pl
 
-
-from byol.model import JPNet
+from models.model import JPNet
 import data_utils.modules as data_modules
 
 from argparse import ArgumentParser
@@ -23,10 +22,10 @@ parser.add_argument('--weight_decay', default=1.0e-6, type=float, help='weight d
 parser.add_argument('--warmup_epochs', default=10, type=int, help='number of warmup epochs')
 parser.add_argument('--proj_dim', default=256, type=int, help='projected dim')
 parser.add_argument('--hidden_dim', default=4096, type=int, help='hidden dim in proj/pred head')
-parser.add_argument('--base_momentum', default=0.99, type=float, help='base momentum for byol')
-parser.add_argument('--final_momentum', default=1.0, type=float, help='final momentum for byol')
+parser.add_argument('--base_momentum', default=0.99, type=float, help='base momentum for models')
+parser.add_argument('--final_momentum', default=1.0, type=float, help='final momentum for models')
 parser.add_argument('--comment', default=datetime.now().strftime('%b%d_%H-%M-%S'), type=str, help='wandb comment')
-parser.add_argument('--project', default='essential-byol', type=str, help='wandb project')
+parser.add_argument('--project', default='essential-models', type=str, help='wandb project')
 parser.add_argument('--entity', default=None, type=str, help='wandb entity')
 parser.add_argument('--offline', default=False, action='store_true', help='disable wandb')
 

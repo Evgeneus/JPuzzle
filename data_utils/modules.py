@@ -33,7 +33,7 @@ class ImageNetDataModule(LightningDataModule):
 
     def setup(self, stage=None): # called on every GPU
         # build tranforms
-        train_transform = BYOLDataTransform(
+        train_transform = JPDataTransform(
             crop_size=224,
             mean=self.mean,
             std=self.std)

@@ -4,9 +4,7 @@ import pytorch_lightning as pl
 from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from pl_bolts.optimizers.lars_scheduling import LARSWrapper
 
-from byol.nets import Encoder
-
-import math
+from models.nets import Encoder
 
 
 class JPNet(pl.LightningModule):
@@ -134,8 +132,8 @@ class JPNet(pl.LightningModule):
 
         # gather results and log stats
         logs = {
-            'loss': loss,
-            'loss_linear': loss_linear,
+            'j_loss': loss.item() / 2,
+            'loss_linear': loss_linear.item(),
             'jx_acc': jx_acc,
             'jy_acc': jy_acc,
             'lr': self.trainer.optimizers[0].param_groups[0]['lr']}
@@ -155,7 +153,7 @@ class JPNet(pl.LightningModule):
         acc1, acc5 = self.accuracy(preds, labels)
 
         # gather results and log
-        logs = {'val/acc@1': acc1, 'val/acc@5':acc5}
+        logs = {'val/acc@1': acc1, 'val/acc@5': acc5}
         self.log_dict(logs, on_step=False, on_epoch=True, sync_dist=True)
 
     @torch.no_grad()

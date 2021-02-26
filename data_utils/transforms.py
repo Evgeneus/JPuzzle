@@ -1,5 +1,3 @@
-
-import torch
 from torchvision import transforms as transform_lib
 import cv2
 from PIL import Image, ImageOps
